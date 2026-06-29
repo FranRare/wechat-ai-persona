@@ -4,3 +4,6 @@ __pycache__/
 logs/
 *.log
 node_modules/
+data/memory.db
+data/wechat_history.json
+.env
