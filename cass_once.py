@@ -139,6 +139,9 @@ def main():
     # Do not print anything here, otherwise standalone_wechat_cass.js may send a duplicate.
     if cass_text == CLAUDE_WEB_TOOL_DISPATCHED:
         history.append({"role": "user", "content": user_text})
+        from memory.compactor import maybe_compact
+        from cass_openai_client import client, OPENAI_MODEL
+        history = maybe_compact(history, client, OPENAI_MODEL)
         save_history(history)
         return
 
@@ -147,6 +150,9 @@ def main():
     bus_post("wechat", "out", cass_text)
     history.append({"role": "user", "content": user_text})
     history.append({"role": "assistant", "content": cass_text})
+    from memory.compactor import maybe_compact
+    from cass_openai_client import client, OPENAI_MODEL
+    history = maybe_compact(history, client, OPENAI_MODEL)
     save_history(history)
     print(cass_text)
     try:

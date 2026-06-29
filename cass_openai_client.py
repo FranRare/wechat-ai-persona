@@ -78,6 +78,18 @@ def _fetch_mcp_context() -> str:
 
 # ─── system prompt ─────────────────────────────────────────────────────────────
 
+def _load_local_memories(n: int = 10) -> str:
+    try:
+        from memory.memory_store import list_recent
+        rows = list_recent(limit=n)
+        if not rows:
+            return ""
+        lines = [f"- [{r['category']}] {r['content']}" for r in rows]
+        return "\n".join(lines)
+    except Exception:
+        return ""
+
+
 def build_cass_system_prompt() -> str:
     """
     Build the Cass system prompt.
@@ -85,8 +97,9 @@ def build_cass_system_prompt() -> str:
     Context priority (highest → lowest):
     1. CASS_WEIXIN_PERSONA.md  — authoritative style for Weixin
     2. MCP context snapshot    — recent cross-channel messages + memories (live)
-    3. CASIMIR_PROFILE.md, MEMORY.md, SOUL.md  — static persona reference
-    4. Runtime instruction block
+    3. Local SQLite memories   — from memory/memory_store.py
+    4. CASIMIR_PROFILE.md, MEMORY.md, SOUL.md  — static persona reference
+    5. Runtime instruction block
     """
     parts: list[str] = []
 
@@ -125,7 +138,12 @@ def build_cass_system_prompt() -> str:
             + mcp_context
         )
 
-    # 4. Static persona files (lower priority than MCP)
+    # 4. Local SQLite memories
+    local_mems = _load_local_memories(10)
+    if local_mems:
+        parts.append("## Recent Long-term Memories (local DB)\n" + local_mems)
+
+    # 5. Static persona files (lower priority than MCP)
     for name in ["CASIMIR_PROFILE.md", "MEMORY.md", "SOUL.md"]:
         text = read_text_if_exists(CASS_ROOT / name)
         if text:
@@ -268,14 +286,41 @@ def ask_cass(
             return ""
         return result
     except Exception:
-        # Hard fallback: call OpenAI directly (no MCP, no loop)
+        # Hard fallback: call OpenAI directly with memory tools
+        from memory.memory_tools import MEMORY_TOOLS, handle_tool_call
+        import json as _json
+
         resp = client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
+            tools=MEMORY_TOOLS,
+            tool_choice="auto",
         )
-        return resp.choices[0].message.content or ""
+        msg = resp.choices[0].message
+
+        # Handle tool calls if present
+        if msg.tool_calls:
+            messages.append(msg)
+            for tc in msg.tool_calls:
+                args = _json.loads(tc.function.arguments)
+                result = handle_tool_call(tc.function.name, args)
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": result,
+                })
+            # Second pass after tool results
+            resp2 = client.chat.completions.create(
+                model=OPENAI_MODEL,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+            return resp2.choices[0].message.content or ""
+
+        return msg.content or ""
 
 
 if __name__ == "__main__":
